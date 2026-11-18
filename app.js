@@ -4,6 +4,7 @@ const TOPIC_PREFIX = 'ev-alisveris/';
 const ROOM_KEY = 'alisveris.room.v2';
 const STATE_PREFIX = 'alisveris.state.v2.';
 const HIDE_KEY = 'alisveris.hideDone.v1';
+const NOTE_KEY = 'alisveris.note.v2.';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -17,15 +18,18 @@ const el = {
   copyLink: $('#copy-link'), closeShare: $('#close-share'),
   menuModal: $('#menu-modal'), hideDone: $('#hide-done'), menuShare: $('#menu-share'),
   menuInstall: $('#menu-install'), menuNew: $('#menu-new'), menuClose: $('#menu-close'),
-  installBtn: $('#install-btn'), clearDone: $('#clear-done'), toast: $('#toast')
+  installBtn: $('#install-btn'), clearDone: $('#clear-done'), toast: $('#toast'),
+  sharedNote: $('#shared-note'), noteSync: $('#note-sync')
 };
 
 let room = null;
 let topic = null;
+let noteTopic = null;
 let client = null;
 let connected = false;
 let connectTimer = null;
 let gotMessage = false;
+let gotNote = false;
 let lastPublishAt = 0;
 let items = [];
 let signature = '';
@@ -33,6 +37,9 @@ let editing = null;
 let hideDone = localStorage.getItem(HIDE_KEY) === '1';
 let deferredInstall = null;
 let toastTimer = null;
+let noteState = { text: '', updatedAt: 0 };
+let noteTimer = null;
+const openNotes = new Set();
 const saveTimers = new Map();
 
 /* ── Yardımcılar ───────────────────────────────────── */
@@ -82,6 +89,7 @@ function readRoom() {
   }
   localStorage.setItem(ROOM_KEY, room);
   topic = TOPIC_PREFIX + room;
+  noteTopic = topic + '/note';
   u.searchParams.set('o', room);
   history.replaceState(null, '', u.pathname + u.search);
 }
@@ -91,6 +99,7 @@ function normalizeItem(x) {
     id: String(x.id || makeId()),
     name: String(x.name || ''),
     qty: x.qty == null ? '' : String(x.qty),
+    note: x.note == null ? '' : String(x.note),
     priority: ['low', 'normal', 'urgent'].includes(x.priority) ? x.priority : 'normal',
     done: !!x.done,
     deleted: !!x.deleted,
@@ -101,7 +110,7 @@ function normalizeItem(x) {
 
 function stateKey(arr) {
   return JSON.stringify(arr.map((i) => [
-    i.id, i.name, i.qty, i.priority, i.done, i.deleted, i.createdAt, i.updatedAt
+    i.id, i.name, i.qty, i.note, i.priority, i.done, i.deleted, i.createdAt, i.updatedAt
   ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 }
 
@@ -118,6 +127,73 @@ function saveState() {
   localStorage.setItem(STATE_PREFIX + room, JSON.stringify(items));
 }
 
+/* ── Ortak not ─────────────────────────────────────── */
+function updateNoteStatus(text) {
+  if (!el.noteSync) return;
+  el.noteSync.textContent = text || (noteState.text ? 'eşinle paylaşılıyor' : 'boş');
+}
+
+function loadNote() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(NOTE_KEY + room) || 'null');
+    noteState = raw && typeof raw.text === 'string'
+      ? { text: raw.text, updatedAt: Number(raw.updatedAt) || 0 }
+      : { text: '', updatedAt: 0 };
+  } catch (_) {
+    noteState = { text: '', updatedAt: 0 };
+  }
+  if (el.sharedNote) el.sharedNote.value = noteState.text;
+  updateNoteStatus();
+}
+
+function saveNote() {
+  try { localStorage.setItem(NOTE_KEY + room, JSON.stringify(noteState)); } catch (_) {}
+}
+
+function setNote(text, updatedAt) {
+  noteState = { text, updatedAt };
+  saveNote();
+  if (el.sharedNote && el.sharedNote.value !== text) el.sharedNote.value = text;
+  updateNoteStatus();
+}
+
+function publishNote() {
+  if (client && connected && noteTopic) {
+    client.publish(noteTopic, JSON.stringify(noteState), { qos: 1, retain: true });
+  }
+}
+
+function onNoteMessage(payload) {
+  let incoming;
+  try { incoming = JSON.parse(payload.toString()); } catch (_) { return; }
+  if (!incoming || typeof incoming.text !== 'string') return;
+  const next = { text: incoming.text, updatedAt: Number(incoming.updatedAt) || 0 };
+  const mine = noteState.updatedAt;
+  if (next.updatedAt > mine || (next.updatedAt === mine && next.text > noteState.text)) {
+    setNote(next.text, next.updatedAt);
+  } else if (next.updatedAt < mine || (next.updatedAt === mine && next.text < noteState.text)) {
+    publishNote();
+  }
+}
+
+function scheduleNoteSave() {
+  updateNoteStatus('yazılıyor…');
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(() => {
+    noteTimer = null;
+    setNote(el.sharedNote.value, Date.now());
+    publishNote();
+  }, 500);
+}
+
+function flushNoteSave() {
+  if (noteTimer === null) return;
+  clearTimeout(noteTimer);
+  noteTimer = null;
+  setNote(el.sharedNote.value, Date.now());
+  publishNote();
+}
+
 function visibleItems() {
   return items.filter((i) => !i.deleted).sort((a, b) => a.createdAt - b.createdAt);
 }
@@ -126,7 +202,7 @@ function visibleItems() {
 // olabilir. O durumda "yerel kazanır" kuralı iki cihazı farklı değerde bırakır.
 // İçeriğe göre deterministik bir sıralama kullanarak ikisi de aynı kazananı seçer.
 function itemKey(it) {
-  return [it.name, it.qty, it.priority, it.done ? 1 : 0, it.deleted ? 1 : 0, it.createdAt].join('\u0001');
+  return [it.name, it.qty, it.note, it.priority, it.done ? 1 : 0, it.deleted ? 1 : 0, it.createdAt].join('\u0001');
 }
 
 function newer(a, b) {
@@ -152,6 +228,11 @@ function publish() {
 }
 
 function onMessage(receivedTopic, payload) {
+  if (receivedTopic === noteTopic) {
+    gotNote = true;
+    onNoteMessage(payload);
+    return;
+  }
   if (receivedTopic !== topic) return;
   gotMessage = true;
   let incoming;
@@ -175,6 +256,7 @@ function connect() {
   }
   connected = false;
   gotMessage = false;
+  gotNote = false;
 
   if (!window.mqtt) {
     setSync('error');
@@ -203,14 +285,16 @@ function connect() {
     connected = true;
     clearTimeout(connectTimer);
     setSync('online');
-    client.subscribe(topic, { qos: 1 }, (err) => {
+    client.subscribe([topic, noteTopic], { qos: 1 }, (err) => {
       if (err) {
         toast('Liste aboneliği kurulamadı');
         return;
       }
-      // Broker retained mesajı kaybettiyse (örn. restart) yerel listeyi geri koy.
+      // Broker retained mesajı kaybettiyse (örn. restart) yerel veriyi geri koy.
       setTimeout(() => {
-        if (connected && !gotMessage) publish();
+        if (!connected) return;
+        if (!gotMessage) publish();
+        if (!gotNote) publishNote();
       }, 1500);
     });
   });
@@ -252,6 +336,18 @@ function rowHTML(i) {
       ${prios.map(([value, label]) => `
         <button type="button" class="p-btn${i.priority === value ? ' active' : ''}"
                 data-act="priority" data-priority="${value}" aria-pressed="${i.priority === value}">${label}</button>`).join('')}
+      <button type="button"
+              class="note-toggle${i.note ? ' has-note' : ''}${openNotes.has(i.id) ? ' open' : ''}"
+              data-act="note" aria-expanded="${openNotes.has(i.id)}"
+              aria-label="${openNotes.has(i.id) ? 'Notu kapat' : 'Not ekle'}" title="Not">
+        <span class="ico">✏️</span><span class="plus">+</span>
+      </button>
+    </div>
+    <div class="note-box"${openNotes.has(i.id) ? '' : ' hidden'}>
+      <textarea class="item-note" data-field="note" data-id="${esc(i.id)}" rows="2"
+                maxlength="300" placeholder="Bu ürüne not (örn. yağsız olsun)"
+                aria-label="Ürün notu">${esc(i.note)}</textarea>
+      ${i.note ? '<button type="button" class="note-clear" data-act="note-clear">Notu sil</button>' : ''}
     </div>
   </article>`;
 }
@@ -279,8 +375,8 @@ function paint() {
 
   const sig = JSON.stringify(shown.map((i) => (
     editing && editing.id === i.id
-      ? [i.id, '@', i.priority, i.done]
-      : [i.id, i.name, i.qty, i.priority, i.done]
+      ? [i.id, '@', i.priority, i.done, openNotes.has(i.id)]
+      : [i.id, i.name, i.qty, i.note, i.priority, i.done, openNotes.has(i.id)]
   )));
   if (sig === signature) return;
 
@@ -324,7 +420,7 @@ function flushSave(id, field, value) {
 function addItem(name) {
   const now = Date.now();
   items.push(normalizeItem({
-    id: makeId(), name, qty: '', priority: 'normal',
+    id: makeId(), name, qty: '', note: '', priority: 'normal',
     done: false, deleted: false, createdAt: now, updatedAt: now
   }));
   commit();
@@ -336,6 +432,32 @@ function deleteItem(id) {
   item.deleted = true;
   item.updatedAt = Date.now();
   commit();
+}
+
+// Not kutusunu açıp kapatırken listeyi yeniden çizmeyelim: kullanıcı yazarken
+// odak kaybolmasın ve tıklama, yeniden çizimde kaybolmasın.
+function toggleNote(id) {
+  const row = el.list.querySelector(`[data-id="${CSS.escape(id)}"]`);
+  if (!row) return;
+  const box = row.querySelector('.note-box');
+  const btn = row.querySelector('.note-toggle');
+  if (!box || !btn) return;
+
+  const open = !openNotes.has(id);
+  if (open) openNotes.add(id); else openNotes.delete(id);
+  box.hidden = !open;
+  btn.classList.toggle('open', open);
+  btn.setAttribute('aria-expanded', String(open));
+  btn.setAttribute('aria-label', open ? 'Notu kapat' : 'Not ekle');
+  if (open) {
+    const ta = box.querySelector('.item-note');
+    if (ta) ta.focus();
+  }
+}
+
+function clearNote(id) {
+  openNotes.delete(id);
+  updateItem(id, { note: '' });
 }
 
 /* ── Arayüz olayları ───────────────────────────────── */
@@ -397,6 +519,8 @@ function wireEvents() {
     if (btn.dataset.act === 'check') updateItem(id, { done: !item.done });
     else if (btn.dataset.act === 'delete') deleteItem(id);
     else if (btn.dataset.act === 'priority') updateItem(id, { priority: btn.dataset.priority });
+    else if (btn.dataset.act === 'note') toggleNote(id);
+    else if (btn.dataset.act === 'note-clear') clearNote(id);
   });
 
   el.list.addEventListener('input', (e) => {
@@ -427,6 +551,11 @@ function wireEvents() {
     done.forEach((i) => { i.deleted = true; i.updatedAt = now; });
     commit();
   });
+
+  if (el.sharedNote) {
+    el.sharedNote.addEventListener('input', scheduleNoteSave);
+    el.sharedNote.addEventListener('blur', flushNoteSave);
+  }
 
   el.shareBtn.addEventListener('click', () => {
     el.shareLink.textContent = shareLink();
@@ -460,9 +589,12 @@ function wireEvents() {
     room = makeRoom();
     localStorage.setItem(ROOM_KEY, room);
     topic = TOPIC_PREFIX + room;
+    noteTopic = topic + '/note';
     items = [];
+    openNotes.clear();
     signature = '';
     saveState();
+    loadNote();
     const u = new URL(location.href);
     u.searchParams.set('o', room);
     history.replaceState(null, '', u.pathname + u.search);
@@ -494,6 +626,7 @@ function boot() {
   window.__alisverisBooted = true;
   readRoom();
   loadState();
+  loadNote();
   el.roomBadge.textContent = room;
   el.hideDone.checked = hideDone;
   wireEvents();
@@ -502,7 +635,9 @@ function boot() {
 
   // Dakikada bir retained mesajı tazele; broker veriyi düşürürse geri gelsin.
   setInterval(() => {
-    if (connected && Date.now() - lastPublishAt > 50000) publish();
+    if (!connected) return;
+    if (Date.now() - lastPublishAt > 50000) publish();
+    publishNote();
   }, 60000);
 
   if ('serviceWorker' in navigator) {

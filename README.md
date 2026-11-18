@@ -2,13 +2,13 @@
 
 iPhone ve Android için tek bir ortak alışveriş listesi. **Kayıt, Firebase, ödeme veya hesap yok.** Bağlantıyı açan iki kişi aynı listeyi görür; biri yazdığında diğeri anında görür.
 
-Ürün ekleme, **miktar** (boş başlar, içinde silik "miktar" yazar, serbest metin) ve **öncelik** (**Önemsiz → Normal → Acil**, varsayılan Normal) alanları vardır. Alınan ürünler işaretlenir, istenirse gizlenir veya topluca silinir.
+Ürün ekleme, **miktar** (boş başlar, içinde silik "miktar" yazar, serbest metin), **öncelik** (**Önemsiz → Normal → Acil**, varsayılan Normal), isteğe bağlı **ürün notu** (✏️+ simgesiyle açılır) ve sayfanın altında iki kişinin ortak kullandığı **ortak not defteri** vardır. Alınan ürünler işaretlenir, istenirse gizlenir veya topluca silinir.
 
 ## Nasıl çalışıyor?
 
 - Liste, herkese açık ve ücretsiz bir MQTT broker'da (`wss://broker.hivemq.com:8884/mqtt`) **retained** (saklanan) mesaj olarak tutulur.
-- Bağlantıdaki rastgele liste kodu (örn. `EV7K2M9`) konu adıdır: `ev-alisveris/EV7K2M9`.
-- Telefon açılınca bu konuya abone olur; broker son listeyi hemen gönderir. Bir değişiklik olunca tüm liste yeniden yayınlanır.
+- Bağlantıdaki rastgele liste kodu (örn. `EV7K2M9`) konu adıdır: `ev-alisveris/EV7K2M9`. Ortak not ayrı bir konuda saklanır: `ev-alisveris/EV7K2M9/note`.
+- Telefon açılınca bu konulara abone olur; broker son listeyi ve son notu hemen gönderir. Bir değişiklik olunca ilgili konu yeniden yayınlanır. Ürün notları ürünün kendisiyle birlikte, ortak not ise ayrı mesaj olarak senkron olur.
 - Birleştirme **ürün ürün** yapılır; iki telefon farklı ürün eklediyse ikisi de listede kalır, biri diğerinin ürününü silmez.
 - Aynı ürüne iki kişi aynı anda müdahale ederse **daha yeni zaman damgalı** değişiklik kazanır. Zaman damgaları aynı milisaniyeye denk gelirse (çok hızlı eşzamanlı düzenleme) içeriğe göre deterministik bir sıralama kullanılır; böylece iki telefon farklı değerde kalmaz, ikisi de aynı kazananı gösterir. Silme işlemleri de zaman damgalı "tombstone" olarak saklanır, silinen ürün geri gelmez.
 - İnternet yokken liste telefonun kendi deposunda durur; bağlantı gelince değişiklikler otomatik eşleşir.
@@ -50,7 +50,9 @@ Ek önlemler: bağlanınca broker'dan mesaj gelmezse yerel liste 1,5 sn sonra ye
 - Öncelik butonları sırayla **Önemsiz / Normal / Acil**; varsayılan **Normal**. Acil ürünün sol kenarı kırmızı olur.
 - ✓ ürünü "alındı" işaretler. **Seçenekler → Alınanları gizle** ile gizleyebilir, **Alınanları temizle** ile topluca silebilirsiniz.
 - Ürün adına veya miktara dokunup düzenleyebilirsiniz; değişiklik anında eşinize gider.
-- **Seçenekler → Yeni liste oluştur** ile tamamen yeni, boş bir liste ve yeni bağlantı açılır.
+- **Ürün notu:** Ürünün altındaki ✏️+ simgesine dokunun; not kutusu açılır. Varsayılan olarak kapalıdır, yer kaplamaz. Not yazınca simge maviya döner; tekrar dokununca kapanır, **Notu sil** bağlantısıyla not temizlenir. Örn. "yağsız olsun", "tam buğday".
+- **Ortak not:** Sayfanın altındaki 📌 Ortak not alanına yazdığınız her şey eşinizin telefonunda da görünür. Örn. "market yarın kapalı", "kasada ödeme". Yazarken *yazılıyor…*, bırakınca *eşinle paylaşılıyor* yazar.
+- **Seçenekler → Yeni liste oluştur** ile tamamen yeni, boş bir liste, yeni bağlantı ve boş bir ortak not açılır.
 
 ## Güvenlik ve sınırlar
 
@@ -62,6 +64,7 @@ Ek önlemler: bağlanınca broker'dan mesaj gelmezse yerel liste 1,5 sn sonra ye
 
 | Belirti | Çözüm |
 |---|---|
+| "Uygulama yüklenemedi" yazıyor | `index.html` dosyasını çift tıklayarak açmışsın. Dosyayı bir web sunucusundan (GitHub Pages veya `python -m http.server`) açmalısın; PWA kurulumu için zaten https gerekir. |
 | "Bağlantı yok" yazıyor | İnterneti kontrol et. Ortak broker geçici olarak erişilemez olabilir; liste bu telefonda korunur, birazdan tekrar bağlanır. |
 | Eşim listeyi göremiyor | Bağlantıyı tam kopyaladığından (sonundaki `?o=...` dahil) emin ol. |
 | Eski ürünler geri geldi | Aynı ürüne iki telefon neredeyse aynı anda müdahale etmiş olabilir; son değişiklik kazanır. Bir kez daha silmen yeterli. |

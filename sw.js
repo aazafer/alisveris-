@@ -1,5 +1,5 @@
 /* Ev Alışveriş Listesi — service worker (Firebase yok, MQTT kullanılır) */
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = 'alisveris-' + VERSION;
 
 const CORE = [
