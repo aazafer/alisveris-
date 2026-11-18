@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Alışveriş">
+  <meta name="description" content="Ev için ortak alışveriş listesi. Kayıt gerektirmez, iki telefon arasında anlık senkron.">
+  <title>Ev Alışveriş Listesi</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div class="app-shell">
+  <section id="app" class="screen">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-icon">🛒</span>
+        <div class="brand-text">
+          <h1>Alışveriş</h1>
+          <span id="room-badge" class="room">—</span>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="share-btn" class="icon-btn" type="button" aria-label="Bağlantıyı paylaş" title="Bağlantıyı paylaş">🔗</button>
+        <button id="menu-btn" class="icon-btn" type="button" aria-label="Seçenekler" title="Seçenekler">⋯</button>
+      </div>
+    </header>
+
+    <div class="meta">
+      <span id="sync" class="sync connecting"><i></i><span>Bağlanıyor…</span></span>
+      <span id="counts"></span>
+    </div>
+
+    <form id="add-form" class="addbar" autocomplete="off">
+      <input id="new-item" type="text" placeholder="Ürün yaz… (örn. süt)" enterkeyhint="done"
+             maxlength="120" aria-label="Yeni ürün">
+      <button type="submit" class="primary">Ekle</button>
+    </form>
+
+    <main>
+      <div id="list" class="list" aria-live="polite"></div>
+      <div id="empty" class="empty" hidden>
+        <div class="empty-icon">📝</div>
+        <p>Liste boş</p>
+        <span>Yukarıdan bir ürün ekleyin; eşiniz anında görsün.</span>
+      </div>
+    </main>
+
+    <footer class="bottombar">
+      <button id="install-btn" class="ghost" type="button" hidden>📲 Ana ekrana ekle</button>
+      <span class="spacer"></span>
+      <button id="clear-done" class="ghost" type="button">Alınanları temizle</button>
+    </footer>
+  </section>
+
+  <!-- ── Paylaşım ────────────────────────────────── -->
+  <div id="share-modal" class="modal" hidden>
+    <div class="sheet">
+      <h2>Eşinize gönderin</h2>
+      <p>Bu bağlantıyı açan herkes listeyi görebilir ve düzenleyebilir. Başka bir ayar veya kayıt gerekmez.</p>
+      <div id="share-link" class="linkbox"></div>
+      <div class="row">
+        <button id="copy-link" class="primary" type="button">Bağlantıyı kopyala</button>
+        <button id="close-share" class="ghost" type="button">Kapat</button>
+      </div>
+      <p class="fine">Liste kodu: <b id="share-room"></b></p>
+    </div>
+  </div>
+
+  <!-- ── Seçenekler ──────────────────────────────── -->
+  <div id="menu-modal" class="modal" hidden>
+    <div class="sheet">
+      <h2>Seçenekler</h2>
+      <label class="switch-row">
+        <span>Alınanları gizle</span>
+        <input id="hide-done" type="checkbox">
+      </label>
+      <button id="menu-share" class="ghost" type="button">🔗 Bağlantıyı kopyala</button>
+      <button id="menu-install" class="ghost" type="button">📲 Ana ekrana ekle</button>
+      <button id="menu-new" class="danger" type="button">Yeni liste oluştur</button>
+      <button id="menu-close" class="primary" type="button">Kapat</button>
+      <p class="fine">iPhone: Safari → Paylaş → <b>Ana Ekrana Ekle</b>.<br>Android: Chrome → ⋮ → <b>Ana ekrana yükle</b>.</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.4/dist/mqtt.min.js"></script>
+<script defer src="./app.js"></script>
+<script>
+  // Dosya çift tıklanarak açıldığında ES modülleri CORS nedeniyle yüklenmez;
+  // app.js çalışmazsa ekran "Bağlanıyor"da kalmasın, sebep söylensin.
+  setTimeout(function () {
+    if (window.__alisverisBooted) return;
+    var s = document.querySelector('#sync');
+    if (!s) return;
+    s.className = 'sync error';
+    s.querySelector('span').textContent = 'Uygulama yüklenemedi';
+    var t = document.querySelector('#toast');
+    if (t) {
+      t.textContent = 'index.html dosyasını doğrudan açtıysanız, bir yerel sunucu üzerinden açın veya GitHub Pages adresini kullanın.';
+      t.hidden = false;
+    }
+  }, 6000);
+</script>
+</body>
+</html>
